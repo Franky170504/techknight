@@ -11,6 +11,7 @@ STATION_ID = "BOR-01"
 
 LAT, LON = 19.23, 72.85
 AQUIFER_AREA = 2.0          # sqkm
+AQUIFER_AREA_M2 = AQUIFER_AREA * 1_000_000
 SPECIFIC_YIELD = 0.15
 LAND_USE = "Urban"
 
@@ -72,6 +73,7 @@ file_exists = Path(CSV_FILE).exists()
 
 if file_exists:
     df = pd.read_csv(CSV_FILE, parse_dates=["timestamp"])
+    df = df.sort_values("timestamp").reset_index(drop=True)
     last_time = df["timestamp"].iloc[-1]
     last_level = df["water_level_m"].iloc[-1]
 else:
@@ -91,7 +93,6 @@ while t <= now:
     temp = generate_temperature(t)
     demand = generate_demand(t.month)
 
-    # Recharge (lagged & smoothed)
     recharge_effect = rain * 0.015
     extraction_effect = demand * 1.8
 
@@ -123,12 +124,34 @@ while t <= now:
     last_level = new_level
     t += timedelta(hours=1)
 
-# -----------------------------
-# Append & save
-# -----------------------------
+# Append new rows
 if rows:
     df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
-    df.to_csv(CSV_FILE, index=False)
+
+# -----------------------------
+# 🔹 RECHARGE & AVAILABILITY (ALL ROWS)
+# -----------------------------
+df = df.sort_values("timestamp").reset_index(drop=True)
+
+# Water level change
+df["delta_h"] = df["water_level_m"].shift(1) - df["water_level_m"]
+df.loc[0, "delta_h"] = 0.0
+
+# Recharge (m³)
+df["recharge"] = (
+    SPECIFIC_YIELD *
+    df["delta_h"].clip(lower=0) *
+    AQUIFER_AREA_M2
+)
+
+# Availability (m³)
+df["availability"] = df["recharge"] - (df["demand_mcm"] * 1_000_000)
+
+# -----------------------------
+# Save dataset
+# -----------------------------
+df.to_csv(CSV_FILE, index=False)
 
 print(f"✅ DWLR data updated to {now}")
 print(f"Total rows: {len(df)}")
+print(df[["timestamp", "water_level_m", "recharge", "availability"]].tail())
