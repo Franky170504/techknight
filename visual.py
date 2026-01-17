@@ -540,7 +540,6 @@ elif view_mode == "Research & Data Access":
     # Excel Export (requires openpyxl)
     try:
         import io
-        from openpyxl import Workbook
 
         if st.button("📊 Download as Excel", type="primary", use_container_width=True):
             # Create Excel file in memory

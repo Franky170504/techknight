@@ -48,6 +48,15 @@ def generate_demand(month):
     low, high = bases[season(month)]
     return np.random.uniform(low, high)
 
+def get_status(level):
+    if level < 5:
+        return 'Safe'
+    elif 5 < level < 10:
+        return 'Semi-Critical'
+    else:
+        return 'Critical'
+
+
 # -----------------------------
 # Load or initialize dataset
 # -----------------------------
@@ -75,7 +84,7 @@ while t <= now:
     # Weather is the same for the whole area that hour
     rain = generate_rainfall(t.month)
     temp = generate_temperature(t)
-    
+
     # Generate data for each station
     for s_name in STATIONS.values():
         demand = generate_demand(t.month)
@@ -107,6 +116,7 @@ while t <= now:
             "temperature_c": temp,
             "land_use_type": LAND_USE,
             "policy_active": t >= pd.Timestamp("2024-07-01")
+            # "severity" : 
         })
     t += timedelta(hours=1)
 
@@ -132,6 +142,7 @@ df["recharge"] = (
 
 # Availability (m³)
 df["availability"] = df["recharge"] - (df["demand_mcm"] * 1_000_000)
+df['status'] = df['water_level_m'].apply(get_status)
 
 # Save and Sort back to chronological order for the CSV
 df = df.sort_values("timestamp")
