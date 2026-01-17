@@ -41,7 +41,7 @@ def load_data():
 
 @st.cache_data
 def load_predictions():
-    # Load future predictions data
+    # Load future predictions data 
     pred_df = pd.read_csv('notebooks/predictions_next_24h.csv')
     pred_df['timestamp'] = pd.to_datetime(pred_df['timestamp'])
 
