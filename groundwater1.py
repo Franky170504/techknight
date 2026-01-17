@@ -9,8 +9,7 @@ from datetime import datetime, timedelta
 CSV_FILE = "BORIVALI_DWLR_REALTIME_multi.csv"
 # We will use these values to create rows for each station
 STATIONS = {1: "Station_01", 2: "Station_02", 3: "Station_03", 4: "Station_04", 
-            5: "Station_05", 6: "Station_06", 7: "Station_07", 8: "Station_08", 
-            9: "Station_09", 10: "Station_10"}
+            5: "Station_05"}
 
 LAT, LON = 19.23, 72.85
 AQUIFER_AREA = 2.0         
