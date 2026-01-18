@@ -175,6 +175,10 @@ df['status'] = df['water_level_m'].apply(get_status)
 df = df.sort_values("timestamp")
 df.to_csv(CSV_FILE, index=False)
 
+<<<<<<< HEAD
 print(f"DWLR data updated for {len(STATIONS)} stations to {now}")
+=======
+print(f"DWLR data updated for 10 stations to {now}")
+>>>>>>> 44f8e800da1efc841f87bdafc4860dc5a7e84b83
 print(f"Total rows: {len(df)}")
 print(df[["timestamp", "station_id", "water_level_m", "recharge"]].tail(10))
