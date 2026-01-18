@@ -5,11 +5,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 import io
 
-# --- MODULAR LOGIC FUNCTIONS ---
-
-def load_data(file):
-    """Loads data from a file-like object or path."""
-    df = pd.read_csv(file)
+def load_data(file_path):
+    df = pd.read_csv(file_path)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     return df.sort_values('timestamp')
 
@@ -70,9 +67,9 @@ def generate_forecast(models, last_timestamp, features_list, status_cols, horizo
     
     return future_df
 
-def run_full_pipeline(file):
-    """Encapsulates the entire logic: Load -> Encode -> Train -> Forecast."""
-    raw_data = load_data(file)
+def run_full_pipeline(file_path):
+    raw_data = load_data(file_path)
+
     data_with_time = create_time_features(raw_data)
     encoded_data, status_columns = apply_one_hot_encoding(data_with_time)
     
