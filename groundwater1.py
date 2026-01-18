@@ -89,8 +89,20 @@ while t <= now:
     for s_name in STATIONS.values():
         demand = generate_demand(t.month)
         
-        recharge_effect = rain * 0.015
-        extraction_effect = demand * 1.8
+        # Seasonal recharge effect - much stronger during monsoon
+        season_name = season(t.month)
+        if season_name == "monsoon":
+            recharge_effect = rain * 0.08  # Much stronger recharge during monsoon
+        elif season_name == "post_monsoon":
+            recharge_effect = rain * 0.03  # Moderate recharge after monsoon
+        else:
+            recharge_effect = rain * 0.005  # Minimal recharge in dry seasons
+
+        # Seasonal extraction effect - slightly less aggressive in wet seasons
+        if season_name == "monsoon":
+            extraction_effect = demand * 1.2  # Reduced extraction during monsoon
+        else:
+            extraction_effect = demand * 1.8  # Normal extraction in dry seasons
 
         # Calculate new level based on that specific station's previous level
         new_level = (
@@ -133,11 +145,26 @@ df = df.sort_values(["station_id", "timestamp"], ascending=[True, True])
 df["delta_h"] = df.groupby("station_id")["water_level_m"].shift(1) - df["water_level_m"]
 df["delta_h"] = df["delta_h"].fillna(0.0)
 
-# Recharge (m³)
+# Seasonal direct recharge component
+def get_seasonal_recharge_factor(month):
+    season_name = season(month)
+    if season_name == "monsoon":
+        return 2.5  # High recharge factor during monsoon
+    elif season_name == "post_monsoon":
+        return 1.2  # Moderate recharge after monsoon
+    elif season_name == "winter":
+        return 0.8  # Low recharge in winter
+    else:  # summer
+        return 0.3  # Very low recharge in summer
+
+df["seasonal_recharge_factor"] = df["month"].apply(get_seasonal_recharge_factor)
+
+# Combined recharge: delta_h based + seasonal rainfall-based
 df["recharge"] = (
     SPECIFIC_YIELD *
     df["delta_h"].clip(lower=0) *
-    AQUIFER_AREA_M2
+    AQUIFER_AREA_M2 *
+    df["seasonal_recharge_factor"]  # Seasonal multiplier
 )
 
 # Availability (m³)
@@ -148,6 +175,6 @@ df['status'] = df['water_level_m'].apply(get_status)
 df = df.sort_values("timestamp")
 df.to_csv(CSV_FILE, index=False)
 
-print(f"✅ DWLR data updated for 10 stations to {now}")
+print(f"DWLR data updated for {len(STATIONS)} stations to {now}")
 print(f"Total rows: {len(df)}")
 print(df[["timestamp", "station_id", "water_level_m", "recharge"]].tail(10))

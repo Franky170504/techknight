@@ -4,15 +4,23 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pydeck as pdk
 from datetime import datetime, timedelta
+import subprocess
+import sys
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Borivali Groundwater Analytics", layout="wide")
 
 # --- DATA LOADING ---
+# Define Risk Status (global function for reuse)
+def get_status(level):
+    if level < 5: return 'Safe'
+    if level < 10: return 'Semi-Critical'
+    return 'Critical'
+
 @st.cache_data
 def load_data():
-    # Load the specific file you provided
-    df = pd.read_csv('BORIVALI_DWLR_REALTIME.csv')
+    # Load the multi-station file
+    df = pd.read_csv('BORIVALI_DWLR_REALTIME_multi.csv')
     df['timestamp'] = pd.to_datetime(df['timestamp'])
 
     # SAFETY: If extraction_mcm is missing, create it based on demand
@@ -30,23 +38,26 @@ def load_data():
 
     df['season'] = df['month'].apply(get_season)
 
-    # Define Risk Status
-    def get_status(level):
-        if level < 5: return 'Safe'
-        if level < 10: return 'Semi-Critical'
-        return 'Critical'
-
+    # Apply Risk Status
     df['status'] = df['water_level_m'].apply(get_status)
     return df
 
 @st.cache_data
-def load_predictions():
-    # Load future predictions data 
+def load_predictions(selected_station):
+    # Load future predictions data
     pred_df = pd.read_csv('notebooks/predictions_next_24h.csv')
     pred_df['timestamp'] = pd.to_datetime(pred_df['timestamp'])
 
+    # Get current level for selected station
+    df = load_data()
+    station_data = df[df['station_id'] == selected_station]
+    if station_data.empty:
+        # Fallback to first available station if selected station not found
+        current_level = df['water_level_m'].iloc[-1]
+    else:
+        current_level = station_data['water_level_m'].iloc[-1]
+
     # Calculate change from current level
-    current_level = load_data()['water_level_m'].iloc[-1]
     pred_df['change_from_current'] = pred_df['water_level_m'] - current_level
     pred_df['trend'] = pred_df['change_from_current'].apply(lambda x: 'Increase' if x > 0 else 'Decrease')
 
@@ -108,17 +119,7 @@ def check_critical_alerts(data):
 
     return alerts
 
-# Display alerts
-alerts = check_critical_alerts(df)
-if alerts:
-    st.sidebar.header("🚨 Early Warning Alerts")
-    for alert in alerts:
-        if alert['color'] == 'red':
-            st.sidebar.error(alert['message'])
-        elif alert['color'] == 'orange':
-            st.sidebar.warning(alert['message'])
-        else:
-            st.sidebar.success(alert['message'])
+# Alerts will be displayed after sidebar controls are created
 
 # --- SIDEBAR FILTERS ---
 st.sidebar.header("🎛️ Dashboard Controls")
@@ -130,6 +131,37 @@ view_mode = st.sidebar.radio(
     help="Switch between current data monitoring, future groundwater predictions, and research data access"
 )
 
+# 0.1. GWRL Station Selector
+available_stations = sorted(df['station_id'].unique())
+selected_station = st.sidebar.selectbox(
+    "Select GWRL Station",
+    options=available_stations,
+    help="Choose which Ground Water Recording Location to analyze"
+)
+
+# 0.2. Data Refresh Button
+if st.sidebar.button("🔄 Refresh Data", type="primary", help="Run groundwater script to update data and refresh dashboard"):
+    with st.sidebar:
+        with st.spinner("Updating groundwater data... This may take a few moments."):
+            try:
+                # Run the groundwater script
+                result = subprocess.run([sys.executable, "groundwater1.py"],
+                                      capture_output=True, text=True, cwd=".")
+
+                if result.returncode == 0:
+                    st.success("✅ Data refreshed successfully!")
+                    st.info("🔄 Reloading dashboard with updated data...")
+                    # Clear cache and rerun the app
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error updating data: {result.stderr}")
+                    st.info("Please check the groundwater1.py script for issues.")
+
+            except Exception as e:
+                st.error(f"❌ Failed to refresh data: {str(e)}")
+                st.info("Make sure groundwater1.py is in the same directory.")
+
 if view_mode == "Current Monitoring":
     # 1. Timeframe Selector
     timeframe = st.sidebar.selectbox(
@@ -137,7 +169,7 @@ if view_mode == "Current Monitoring":
         ["All Time", "Last 7 Days", "Last 1 Month", "Last 3 Months", "Last 1 Year"]
     )
 
-    # Filter data based on timeframe
+    # Filter data based on timeframe and selected station
     max_date = df['timestamp'].max()
     if timeframe == "Last 7 Days":
         filtered_df = df[df['timestamp'] >= max_date - timedelta(days=7)]
@@ -150,25 +182,59 @@ if view_mode == "Current Monitoring":
     else:
         filtered_df = df.copy()
 
+    # Filter by selected station
+    filtered_df = filtered_df[filtered_df['station_id'] == selected_station]
+
     # 2. Season Selector
     seasons_available = df['season'].unique().tolist()
     selected_season = st.sidebar.multiselect("Filter by Season", options=seasons_available, default=seasons_available)
     filtered_df = filtered_df[filtered_df['season'].isin(selected_season)]
-
-    # 3. Policy Selector
-    policy_filter = st.sidebar.radio("Policy Status", ["All", "Active Only", "Inactive Only"])
-    if policy_filter == "Active Only":
-        filtered_df = filtered_df[filtered_df['policy_active'] == True]
-    elif policy_filter == "Inactive Only":
-        filtered_df = filtered_df[filtered_df['policy_active'] == False]
 else:
     # For future predictions, use full dataset
     filtered_df = df.copy()
 
+# Display alerts for selected station (now that selected_station is defined)
+if view_mode == "Current Monitoring":
+    selected_station_df = filtered_df[filtered_df['station_id'] == selected_station]
+    alerts = check_critical_alerts(selected_station_df)
+    if alerts:
+        st.sidebar.header(f"🚨 Early Warning Alerts - {selected_station}")
+        for alert in alerts:
+            if alert['color'] == 'red':
+                st.sidebar.error(alert['message'])
+            elif alert['color'] == 'orange':
+                st.sidebar.warning(alert['message'])
+            else:
+                st.sidebar.success(alert['message'])
+
 # --- MAIN DASHBOARD ---
 if view_mode == "Current Monitoring":
-    st.title("🌊 Borivali Groundwater Monitoring")
-    st.markdown("### Real-time DWLR Analytics & Decision Support System")
+    # Header with refresh button in corner
+    col_title, col_refresh = st.columns([4, 1])
+
+    with col_title:
+        st.title("🌊 Borivali Groundwater Monitoring")
+        st.markdown("### Real-time DWLR Analytics & Decision Support System")
+
+    with col_refresh:
+        # Corner refresh button
+        if st.button("🔄 Refresh", help="Update groundwater data and refresh dashboard"):
+            with st.spinner("Updating groundwater data... This may take a few moments."):
+                try:
+                    # Run the groundwater script
+                    result = subprocess.run([sys.executable, "groundwater1.py"],
+                                          capture_output=True, text=True, cwd=".")
+
+                    if result.returncode == 0:
+                        st.success("✅ Data refreshed successfully!")
+                        # Clear cache and rerun the app
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Error updating data: {result.stderr}")
+
+                except Exception as e:
+                    st.error(f"❌ Failed to refresh data: {str(e)}")
 
     if filtered_df.empty:
         st.warning("No data found for the selected filters.")
@@ -208,17 +274,21 @@ if view_mode == "Current Monitoring":
         st.plotly_chart(fig_temp, use_container_width=True)
 
     with tab2:
-        st.subheader("Station Location & Current Risk")
+        st.subheader("GWRL Locations & Current Risk Status")
 
-        # Latest record for map
-        map_record = filtered_df.tail(1).copy()
+        # Get latest record for each station from filtered data (includes policy simulations)
+        latest_records = (
+            filtered_df
+            .sort_values('timestamp')
+            .groupby('station_id')
+            .tail(1)
+            .copy()
+        )
 
         # Debug information
         with st.expander("🔍 Map Data Debug Info"):
-            st.write(f"Status: {map_record['status'].iloc[0]}")
-            st.write(f"Water Level: {map_record['water_level_m'].iloc[0]}m")
-            st.write(f"Latitude: {map_record['latitude'].iloc[0]}")
-            st.write(f"Longitude: {map_record['longitude'].iloc[0]}")
+            st.write("Latest records for all GWRLs:")
+            st.dataframe(latest_records[['station_id', 'status', 'water_level_m', 'latitude', 'longitude', 'timestamp']], use_container_width=True)
 
         # Enhanced Map Colors with better visibility
         def get_map_color(status):
@@ -233,25 +303,29 @@ if view_mode == "Current Monitoring":
                 return [128, 128, 128, 200]  # Gray for unknown
 
         # Apply color mapping
-        map_record['color'] = map_record['status'].apply(get_map_color)
+        latest_records['color'] = latest_records['status'].apply(get_map_color)
 
         # Create map with enhanced settings
         try:
+            # Calculate center point for all stations
+            center_lat = latest_records['latitude'].mean()
+            center_lon = latest_records['longitude'].mean()
+
             deck = pdk.Deck(
                 map_style='mapbox://styles/mapbox/light-v9',
                 initial_view_state=pdk.ViewState(
-                    latitude=float(map_record['latitude'].iloc[0]),
-                    longitude=float(map_record['longitude'].iloc[0]),
-                    zoom=15,
+                    latitude=float(center_lat),
+                    longitude=float(center_lon),
+                    zoom=14,  # Slightly zoomed out to show all stations
                     pitch=45,
                 ),
                 layers=[
                     pdk.Layer(
                         'ScatterplotLayer',
-                        data=map_record,
+                        data=latest_records,
                         get_position=['longitude', 'latitude'],
                         get_color='color',
-                        get_radius=500,  # Increased radius for better visibility
+                        get_radius=600,  # Increased radius for better visibility
                         pickable=True,
                         stroked=True,
                         filled=True,
@@ -261,11 +335,12 @@ if view_mode == "Current Monitoring":
                 ],
                 tooltip={
                     "html": """
-                    <b>Station:</b> {station_id}<br/>
+                    <b>GWRL:</b> {station_id}<br/>
                     <b>Water Level:</b> {water_level_m} m<br/>
                     <b>Status:</b> {status}<br/>
                     <b>Rainfall:</b> {rainfall_mm} mm<br/>
-                    <b>Temperature:</b> {temperature_c}°C
+                    <b>Temperature:</b> {temperature_c}°C<br/>
+                    <b>Last Updated:</b> {timestamp}
                     """,
                     "style": {"color": "white"}
                 }
@@ -273,47 +348,195 @@ if view_mode == "Current Monitoring":
 
             st.pydeck_chart(deck)
 
-            # Status indicator below map
-            status_color = {
-                'Safe': '🟢',
-                'Semi-Critical': '🟠',
-                'Critical': '🔴'
-            }.get(map_record['status'].iloc[0], '⚪')
+            # Status indicator below map for selected station
+            selected_station_record = latest_records[latest_records['station_id'] == selected_station]
+            if not selected_station_record.empty:
+                status_color = {
+                    'Safe': '🟢',
+                    'Semi-Critical': '🟠',
+                    'Critical': '🔴'
+                }.get(selected_station_record['status'].iloc[0], '⚪')
 
-            st.info(f"{status_color} **Current Status:** {map_record['status'].iloc[0]} - Water Level: {map_record['water_level_m'].iloc[0]:.2f}m")
+                st.info(f"{status_color} **Selected GWRL Status ({selected_station}):** {selected_station_record['status'].iloc[0]} - Water Level: {selected_station_record['water_level_m'].iloc[0]:.2f}m")
+
+            # Summary of all stations
+            station_summary = latest_records.groupby('status').size().to_dict()
+            summary_text = " | ".join([f"{status}: {count}" for status, count in station_summary.items()])
+            st.write(f"**All GWRLs Overview:** {summary_text}")
 
         except Exception as e:
             st.error(f"Map loading error: {e}")
-            # Fallback: show coordinates
-            st.write("📍 Station Coordinates:")
-            st.write(f"Latitude: {map_record['latitude'].iloc[0]}")
-            st.write(f"Longitude: {map_record['longitude'].iloc[0]}")
+            # Fallback: show coordinates for all stations
+            st.write("📍 GWRL Coordinates:")
+            st.dataframe(latest_records[['station_id', 'latitude', 'longitude', 'status', 'water_level_m']], use_container_width=True)
 
     with tab3:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Seasonal Stress")
-            seas_avg = df.groupby('season')['water_level_m'].mean().reset_index()
-            fig_s = px.bar(seas_avg, x='season', y='water_level_m', color='season', title="Average Depth by Season")
-            st.plotly_chart(fig_s, use_container_width=True)
+        # Enhanced seasonal analysis taking full width
+        st.subheader("📊 Seasonal Groundwater Analysis")
+        st.markdown(f"**Comprehensive Water Level Patterns for {selected_station}**")
 
-        with c2:
-            st.subheader("Policy Effectiveness")
-            pol_avg = df.groupby('policy_active')['water_level_m'].mean().reset_index()
-            pol_avg['policy_active'] = pol_avg['policy_active'].map({True: 'Policy Active', False: 'No Policy'})
-            fig_p = px.bar(pol_avg, x='policy_active', y='water_level_m', color='policy_active', title="Avg Level vs Policy Status")
-            st.plotly_chart(fig_p, use_container_width=True)
+        # Seasonal water level analysis with multiple metrics
+        seasonal_stats = filtered_df.groupby('season').agg({
+            'water_level_m': ['mean', 'min', 'max', 'std'],
+            'rainfall_mm': 'mean',
+            'temperature_c': 'mean'
+        }).round(2)
+
+        seasonal_stats.columns = ['Avg Depth', 'Min Depth', 'Max Depth', 'Std Dev', 'Avg Rainfall', 'Avg Temp']
+        seasonal_stats = seasonal_stats.reset_index()
+
+        # Create comprehensive seasonal chart with dual y-axes
+        fig_seasonal = go.Figure()
+
+        # Add water level bars (primary y-axis)
+        fig_seasonal.add_trace(go.Bar(
+            x=seasonal_stats['season'],
+            y=seasonal_stats['Avg Depth'],
+            name='Avg Water Depth (m)',
+            marker_color='lightblue',
+            yaxis='y'
+        ))
+
+        # Add error bars for min/max range
+        fig_seasonal.add_trace(go.Scatter(
+            x=seasonal_stats['season'],
+            y=seasonal_stats['Min Depth'],
+            mode='markers',
+            name='Min Depth',
+            marker=dict(color='darkblue', size=6),
+            showlegend=False
+        ))
+
+        fig_seasonal.add_trace(go.Scatter(
+            x=seasonal_stats['season'],
+            y=seasonal_stats['Max Depth'],
+            mode='markers',
+            name='Max Depth',
+            marker=dict(color='darkblue', size=6),
+            showlegend=False
+        ))
+
+        # Add rainfall line (secondary y-axis)
+        fig_seasonal.add_trace(go.Scatter(
+            x=seasonal_stats['season'],
+            y=seasonal_stats['Avg Rainfall'],
+            name='Avg Rainfall (mm)',
+            mode='lines+markers',
+            line=dict(color='darkgreen', width=3),
+            marker=dict(size=8, color='darkgreen'),
+            yaxis='y2'
+        ))
+
+        # Update layout with dual y-axes
+        fig_seasonal.update_layout(
+            title=f"Seasonal Water Levels & Rainfall Patterns - {selected_station}",
+            xaxis_title="Season",
+            yaxis=dict(
+                title="Water Depth (m)",
+                autorange="reversed"  # Lower values = more water
+            ),
+            yaxis2=dict(
+                title="Rainfall (mm)",
+                overlaying="y",
+                side="right",
+                showgrid=False
+            ),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            barmode='overlay'
+        )
+
+        st.plotly_chart(fig_seasonal, use_container_width=True)
+
+        # Seasonal insights and metrics
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            # Find season with lowest (best) water levels
+            best_season = seasonal_stats.loc[seasonal_stats['Avg Depth'].idxmin()]['season']
+            best_depth = seasonal_stats['Avg Depth'].min()
+            st.metric("Most Favorable Season", f"{best_season} ({best_depth:.2f}m)")
+
+        with col2:
+            # Find season with highest (worst) water levels
+            worst_season = seasonal_stats.loc[seasonal_stats['Avg Depth'].idxmax()]['season']
+            worst_depth = seasonal_stats['Avg Depth'].max()
+            st.metric("Most Stressed Season", f"{worst_season} ({worst_depth:.2f}m)")
+
+        with col3:
+            # Seasonal variation range
+            seasonal_range = seasonal_stats['Avg Depth'].max() - seasonal_stats['Avg Depth'].min()
+            st.metric("Seasonal Variation", f"{seasonal_range:.2f}m")
+
+        with col4:
+            # Rainfall correlation with water levels
+            correlation = seasonal_stats['Avg Depth'].corr(seasonal_stats['Avg Rainfall'])
+            corr_desc = "Strong" if abs(correlation) > 0.7 else "Moderate" if abs(correlation) > 0.4 else "Weak"
+            st.metric("Rainfall Impact", f"{corr_desc} ({correlation:.2f})")
+
+        # Seasonal comparison table
+        st.subheader("📋 Detailed Seasonal Statistics")
+
+        # Format the table for better readability
+        display_stats = seasonal_stats.copy()
+        display_stats = display_stats.round(2)
+
+        # Add seasonal ranking based on water levels (lower is better)
+        display_stats['Water Level Rank'] = display_stats['Avg Depth'].rank(method='dense').astype(int)
+        display_stats = display_stats.sort_values('Avg Depth')  # Sort by best to worst
+
+        st.dataframe(display_stats, use_container_width=True)
+
+        # Seasonal trends analysis
+        st.subheader("📈 Seasonal Trends Analysis")
+
+        # Water level trend across seasons
+        seasons_order = ['Winter', 'Summer', 'Monsoon', 'Post-Monsoon']
+        trend_data = seasonal_stats.set_index('season').reindex(seasons_order).reset_index()
+
+        # Create trend line chart
+        fig_trend = go.Figure()
+
+        fig_trend.add_trace(go.Scatter(
+            x=trend_data['season'],
+            y=trend_data['Avg Depth'],
+            mode='lines+markers',
+            name='Water Depth Trend',
+            line=dict(color='red', width=4),
+            marker=dict(size=10, color='red')
+        ))
+
+        fig_trend.add_trace(go.Scatter(
+            x=trend_data['season'],
+            y=trend_data['Avg Rainfall'],
+            mode='lines+markers',
+            name='Rainfall Trend',
+            line=dict(color='blue', width=4, dash='dot'),
+            marker=dict(size=10, color='blue'),
+            yaxis='y2'
+        ))
+
+        fig_trend.update_layout(
+            title=f"Seasonal Trends: Water Levels vs Rainfall - {selected_station}",
+            xaxis_title="Season",
+            yaxis=dict(title="Water Depth (m)", autorange="reversed"),
+            yaxis2=dict(title="Rainfall (mm)", overlaying="y", side="right", showgrid=False),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
+        st.plotly_chart(fig_trend, use_container_width=True)
 
         st.divider()
-        st.info("💡 **Judge Tip:** Point out the inverse relationship in the top graph—when the blue bars (rain) are high, the red line (depth) should trend downwards as the aquifer recharges.")
+        st.info("💡 **Judge Tip:** Point out the inverse relationship between rainfall and water depth—higher rainfall seasons typically show lower water depths (more groundwater available), while dry seasons show higher depths (less groundwater).")
 
 elif view_mode == "Future Predictions":
     st.title("🔮 Borivali Future Groundwater Predictions")
     st.markdown("### Next 24-Hour Groundwater Level Forecast")
 
-    # Load predictions data
+    # Load predictions data for selected station
     try:
-        pred_df = load_predictions()
+        pred_df = load_predictions(selected_station)
     except Exception as e:
         st.error(f"Error loading predictions data: {e}")
         st.stop()
@@ -324,7 +547,8 @@ elif view_mode == "Future Predictions":
 
         # Current vs Predicted KPI Comparison
         col1, col2, col3, col4 = st.columns(4)
-        current_val = df.iloc[-1]
+        selected_station_data = df[df['station_id'] == selected_station]
+        current_val = selected_station_data.iloc[-1] if not selected_station_data.empty else df.iloc[-1]
         next_pred = pred_df.iloc[0]
 
         col1.metric(
@@ -357,7 +581,7 @@ elif view_mode == "Future Predictions":
             x=[pred_df['timestamp'].min(), pred_df['timestamp'].max()],
             y=[current_val['water_level_m'], current_val['water_level_m']],
             mode='lines',
-            name='Current Level',
+            name=f'Current Level ({selected_station})',
             line=dict(color='red', dash='dash', width=2),
             showlegend=True
         ))
@@ -374,7 +598,7 @@ elif view_mode == "Future Predictions":
         ))
 
         fig_pred.update_layout(
-            title="Groundwater Level Forecast (Next 24 Hours)",
+            title=f"Groundwater Level Forecast (Next 24 Hours) - {selected_station}",
             xaxis_title="Time",
             yaxis_title="Water Level (m)",
             yaxis_autorange="reversed",  # Lower values = more water
@@ -439,6 +663,40 @@ elif view_mode == "Future Predictions":
                 color_discrete_sequence=['blue']
             )
             st.plotly_chart(fig_rain_pred, use_container_width=True)
+
+        # Predicted values table
+        st.subheader("📋 Detailed Forecast Values")
+        st.markdown("### 24-Hour Prediction Table")
+
+        # Format the prediction data for display
+        display_df = pred_df.copy()
+        display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
+        display_df = display_df[['timestamp', 'water_level_m', 'rainfall_mm', 'temperature_c', 'change_from_current', 'status']]
+
+        # Rename columns for better display
+        display_df.columns = ['Time', 'Water Level (m)', 'Rainfall (mm)', 'Temperature (°C)', 'Change from Current (m)', 'Risk Status']
+
+        # Format numerical columns
+        display_df['Water Level (m)'] = display_df['Water Level (m)'].round(3)
+        display_df['Rainfall (mm)'] = display_df['Rainfall (mm)'].round(2)
+        display_df['Temperature (°C)'] = display_df['Temperature (°C)'].round(1)
+        display_df['Change from Current (m)'] = display_df['Change from Current (m)'].round(3)
+
+        st.dataframe(display_df, use_container_width=True)
+
+        # Add summary statistics
+        st.subheader("📊 Prediction Summary")
+        col_summary1, col_summary2, col_summary3, col_summary4 = st.columns(4)
+
+        with col_summary1:
+            st.metric("Average Water Level", f"{pred_df['water_level_m'].mean():.2f} m")
+        with col_summary2:
+            st.metric("Total Predicted Rainfall", f"{pred_df['rainfall_mm'].sum():.1f} mm")
+        with col_summary3:
+            st.metric("Max Water Level Change", f"{pred_df['change_from_current'].max():+.3f} m")
+        with col_summary4:
+            most_common_status = pred_df['status'].mode().iloc[0]
+            st.metric("Most Common Status", most_common_status)
 
         st.divider()
         st.info("💡 **Prediction Insights:** Green markers indicate decreasing water levels (improving conditions), red markers show increasing levels (worsening conditions). Lower water level depths mean more groundwater available.")
