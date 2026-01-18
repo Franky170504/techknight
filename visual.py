@@ -4,10 +4,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pydeck as pdk
 from datetime import datetime, timedelta
+from src.prediction import run_full_pipeline
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Borivali Groundwater Analytics", layout="wide")
-
+uploaded_file = r"BORIVALI_DWLR_REALTIME_multi.csv"
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
@@ -52,9 +53,12 @@ def load_predictions():
 
     # Define Risk Status for predictions
     def get_status(level):
-        if level < 5: return 'Safe'
-        if level < 10: return 'Semi-Critical'
-        return 'Critical'
+        if level < 5: 
+            return 'Safe'
+        elif 5 <= level < 10: 
+            return 'Semi-Critical'
+        else:
+            return 'Critical'
 
     pred_df['status'] = pred_df['water_level_m'].apply(get_status)
     return pred_df
@@ -320,6 +324,7 @@ elif view_mode == "Future Predictions":
 
     # Show prediction trigger button
     if st.button("🚀 Generate Future Predictions", type="primary", use_container_width=True):
+        prediction_results = run_full_pipeline(uploaded_file)
         st.success("✅ Predictions loaded successfully!")
 
         # Current vs Predicted KPI Comparison
